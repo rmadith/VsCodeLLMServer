@@ -4,36 +4,6 @@ This document tracks advanced features and enhancements planned for future relea
 
 ## High Priority
 
-### Function Calling / Tool Use
-
-**Status**: Not Implemented  
-**Complexity**: High  
-**Value**: High
-
-**Description**:
-Implement support for OpenAI's function calling and Anthropic's tool use features.
-
-**Requirements**:
-- Parse function/tool definitions from requests
-- Convert to VS Code LM format if supported
-- Execute functions and return results
-- Handle multi-turn tool interactions
-
-**Notes**:
-- VS Code LM API has `LanguageModelToolCallPart` support
-- Need to design tool execution security model
-- Consider sandboxing for tool execution
-
-**Implementation Tasks**:
-- [ ] Research VS Code LM tool support capabilities
-- [ ] Design tool registration and execution flow
-- [ ] Implement OpenAI function calling format
-- [ ] Implement Anthropic tool use format
-- [ ] Add security/sandboxing for tool execution
-- [ ] Add configuration for allowed tools
-- [ ] Document tool usage
-- [ ] Add tests
-
 ---
 
 ### Embeddings Endpoint
