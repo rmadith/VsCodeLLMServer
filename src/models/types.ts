@@ -50,11 +50,18 @@ export interface ApiError {
 /**
  * Stream chunk types
  */
-export type StreamChunk = TextChunk | UsageChunk;
+export type StreamChunk = TextChunk | ToolCallChunk | UsageChunk;
 
 export interface TextChunk {
   type: 'text';
   text: string;
+}
+
+export interface ToolCallChunk {
+  type: 'tool_call';
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
 }
 
 export interface UsageChunk {

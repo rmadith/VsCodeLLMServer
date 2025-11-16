@@ -10,7 +10,7 @@ export type AnthropicRole = 'user' | 'assistant';
 /**
  * Content block types
  */
-export type ContentBlock = TextBlock | ImageBlock;
+export type ContentBlock = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
 /**
  * Text content block
@@ -30,6 +30,26 @@ export interface ImageBlock {
     media_type: string;
     data: string;
   };
+}
+
+/**
+ * Tool use block - when model wants to use a tool
+ */
+export interface ToolUseBlock {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, any>;
+}
+
+/**
+ * Tool result block - result from tool execution
+ */
+export interface ToolResultBlock {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string | ContentBlock[];
+  is_error?: boolean;
 }
 
 /**
@@ -59,6 +79,33 @@ export interface Metadata {
 }
 
 /**
+ * Tool input schema
+ */
+export interface ToolInputSchema {
+  type: 'object';
+  properties?: Record<string, any>;
+  required?: string[];
+  [key: string]: any;
+}
+
+/**
+ * Tool definition
+ */
+export interface Tool {
+  name: string;
+  description?: string;
+  input_schema: ToolInputSchema;
+}
+
+/**
+ * Tool choice configuration
+ */
+export type ToolChoice = 
+  | { type: 'auto' }
+  | { type: 'any' }
+  | { type: 'tool'; name: string };
+
+/**
  * Messages API request
  */
 export interface MessagesRequest {
@@ -72,12 +119,15 @@ export interface MessagesRequest {
   stop_sequences?: string[];
   stream?: boolean;
   metadata?: Metadata;
+  // Tool use support
+  tools?: Tool[];
+  tool_choice?: ToolChoice;
 }
 
 /**
  * Stop reason
  */
-export type StopReason = 'end_turn' | 'max_tokens' | 'stop_sequence' | null;
+export type StopReason = 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null;
 
 /**
  * Usage information

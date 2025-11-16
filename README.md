@@ -10,6 +10,7 @@ VS Code LLM Server is a Visual Studio Code extension that runs an HTTP server ex
 
 - ✅ **OpenAI-Compatible API** - `/v1/chat/completions` and `/v1/completions`
 - ✅ **Anthropic-Compatible API** - `/v1/messages`
+- ✅ **Tool Calling** - Full function/tool calling support (client-side execution)
 - ✅ **Streaming Support** - Server-Sent Events (SSE) for both APIs
 - ✅ **Authentication** - Optional API key authentication
 - ✅ **Rate Limiting** - Configurable request limits
@@ -239,6 +240,62 @@ message = client.messages.create(
 print(message.content[0].text)
 ```
 
+## Tool Calling / Function Calling
+
+Full support for **client-side tool calling** with both OpenAI and Anthropic formats:
+
+```python
+# OpenAI format
+response = openai.ChatCompletion.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "What's the weather in SF?"}],
+    tools=[{
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            }
+        }
+    }]
+)
+```
+
+```python
+# Anthropic format
+message = anthropic.messages.create(
+    model="claude-3",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "What's the weather in SF?"}],
+    tools=[{
+        "name": "get_weather",
+        "description": "Get weather for a location",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"}
+            },
+            "required": ["location"]
+        }
+    }]
+)
+```
+
+**How it works:**
+1. Client sends request with tool definitions
+2. Server forwards to GitHub Copilot
+3. Model returns tool call request
+4. **Client executes tool** (secure, client-side)
+5. Client sends tool result back
+6. Model processes result and continues
+
+See [TOOL_CALLING.md](TOOL_CALLING.md) for complete documentation and examples.
+
 ## UI Features
 
 ### Sidebar Control Panel
@@ -345,16 +402,15 @@ See [PRIVACY.md](PRIVACY.md) for detailed information about data handling.
 
 ## Limitations
 
-- **Function Calling**: Not yet supported (planned)
 - **Image Inputs**: Not supported by VS Code LM API
 - **Multiple Completions**: Only `n=1` is supported
 - **Some Parameters**: frequency_penalty, presence_penalty, logprobs not supported
+- **Tool Definitions**: Not passed to VS Code LM (API limitation), but tool calls still work based on conversation context
 
 ## Roadmap
 
 See [TODO_ADVANCED_FEATURES.md](TODO_ADVANCED_FEATURES.md) for planned enhancements:
 
-- Function calling support
 - Embeddings endpoint
 - Fine-tuning endpoints
 - WebSocket support

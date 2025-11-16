@@ -80,10 +80,39 @@ export function convertToVsCodeLmMessages(
         ? vscode.LanguageModelChatMessageRole.Assistant
         : vscode.LanguageModelChatMessageRole.User;
 
-    const content = extractMessageContent(message.content);
+    // Build content parts
+    const contentParts: (vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart | vscode.LanguageModelToolResultPart)[] = [];
 
-    if (content) {
-      vsCodeMessages.push(new vscode.LanguageModelChatMessage(role, content));
+    if (typeof message.content === 'string') {
+      contentParts.push(new vscode.LanguageModelTextPart(message.content));
+    } else {
+      // Process content blocks
+      for (const block of message.content) {
+        if (block.type === 'text') {
+          contentParts.push(new vscode.LanguageModelTextPart(block.text));
+        } else if (block.type === 'tool_use') {
+          // Convert Anthropic tool_use to VS Code tool call
+          contentParts.push(new vscode.LanguageModelToolCallPart(
+            block.id,
+            block.name,
+            block.input
+          ));
+        } else if (block.type === 'tool_result') {
+          // Convert Anthropic tool_result to VS Code tool result
+          const resultContent = typeof block.content === 'string'
+            ? block.content
+            : block.content.map(c => c.type === 'text' ? c.text : '').join('\n');
+          
+          contentParts.push(new vscode.LanguageModelToolResultPart(
+            block.tool_use_id,
+            [new vscode.LanguageModelTextPart(resultContent)]
+          ));
+        }
+      }
+    }
+
+    if (contentParts.length > 0) {
+      vsCodeMessages.push(new vscode.LanguageModelChatMessage(role, contentParts));
     }
   }
 
@@ -98,7 +127,7 @@ export async function handleMessages(
   handler: VsCodeLmHandler,
   requestId: string
 ): Promise<MessagesResponse> {
-  const { messages, system, model, max_tokens, temperature, top_p, top_k } = request;
+  const { messages, system, model, max_tokens, temperature, top_p, top_k, tools, tool_choice } = request;
 
   // Log parameters
   logger.debug('Processing Anthropic messages request', {
@@ -111,11 +140,19 @@ export async function handleMessages(
     top_k,
   });
 
+  if (tools && tools.length > 0) {
+    logger.debug('Tool definitions provided', { requestId, toolCount: tools.length });
+  }
+  if (tool_choice !== undefined) {
+    logger.debug('Tool choice specified', { requestId, tool_choice });
+  }
+
   // Convert messages to VS Code LM format
   const vsCodeMessages = convertToVsCodeLmMessages(messages, system);
 
   // Collect response
   let accumulatedText = '';
+  const contentBlocks: ContentBlock[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -123,25 +160,45 @@ export async function handleMessages(
     for await (const chunk of handler.createMessage(vsCodeMessages)) {
       if (chunk.type === 'text') {
         accumulatedText += chunk.text;
+      } else if (chunk.type === 'tool_call') {
+        // Convert VS Code tool call to Anthropic tool_use format
+        contentBlocks.push({
+          type: 'tool_use',
+          id: chunk.id,
+          name: chunk.name,
+          input: chunk.arguments,
+        });
       } else if (chunk.type === 'usage') {
         inputTokens = chunk.inputTokens;
         outputTokens = chunk.outputTokens;
       }
     }
 
+    // Build content blocks
+    const responseContent: ContentBlock[] = [];
+    
+    // Add text if present
+    if (accumulatedText) {
+      responseContent.push({
+        type: 'text',
+        text: accumulatedText,
+      });
+    }
+
+    // Add tool use blocks
+    responseContent.push(...contentBlocks);
+
+    // Determine stop reason
+    const stopReason: StopReason = contentBlocks.length > 0 ? 'tool_use' : 'end_turn';
+
     // Build response
     const response: MessagesResponse = {
       id: `msg_${uuidv4().replace(/-/g, '')}`,
       type: 'message',
       role: 'assistant',
-      content: [
-        {
-          type: 'text',
-          text: accumulatedText,
-        },
-      ],
+      content: responseContent,
       model: model,
-      stop_reason: 'end_turn',
+      stop_reason: stopReason,
       stop_sequence: null,
       usage: {
         input_tokens: inputTokens,
@@ -153,6 +210,7 @@ export async function handleMessages(
       requestId,
       inputTokens,
       outputTokens,
+      toolUseCount: contentBlocks.length,
     });
 
     return response;
@@ -174,13 +232,17 @@ export async function handleStreamingMessages(
   requestId: string,
   res: Response
 ): Promise<void> {
-  const { messages, system, model } = request;
+  const { messages, system, model, tools } = request;
 
   // Initialize SSE
   initSSE(res);
 
   // Convert messages to VS Code LM format
   const vsCodeMessages = convertToVsCodeLmMessages(messages, system);
+
+  if (tools && tools.length > 0) {
+    logger.debug('Tool definitions provided for streaming request', { requestId, toolCount: tools.length });
+  }
 
   logger.debug('Processing Anthropic streaming messages request', {
     requestId,
@@ -191,7 +253,9 @@ export async function handleStreamingMessages(
   const messageId = `msg_${uuidv4().replace(/-/g, '')}`;
   let inputTokens = 0;
   let outputTokens = 0;
-  let isFirstChunk = true;
+  let contentBlockIndex = 0;
+  let currentBlockIsOpen = false;
+  let hasToolUse = false;
 
   try {
     // Send message_start event
@@ -212,47 +276,91 @@ export async function handleStreamingMessages(
       },
     });
 
-    // Send content_block_start event (for first text block)
-    if (isFirstChunk) {
-      sendAnthropicEvent(res, 'content_block_start', {
-        type: 'content_block_start',
-        index: 0,
-        content_block: {
-          type: 'text',
-          text: '',
-        },
-      });
-      isFirstChunk = false;
-    }
-
     for await (const chunk of handler.createMessage(vsCodeMessages)) {
       if (chunk.type === 'text') {
+        // Start text block if not already open
+        if (!currentBlockIsOpen) {
+          sendAnthropicEvent(res, 'content_block_start', {
+            type: 'content_block_start',
+            index: contentBlockIndex,
+            content_block: {
+              type: 'text',
+              text: '',
+            },
+          });
+          currentBlockIsOpen = true;
+        }
+
         // Send content_block_delta event
         sendAnthropicEvent(res, 'content_block_delta', {
           type: 'content_block_delta',
-          index: 0,
+          index: contentBlockIndex,
           delta: {
             type: 'text_delta',
             text: chunk.text,
           },
         });
+      } else if (chunk.type === 'tool_call') {
+        hasToolUse = true;
+
+        // Close previous block if open
+        if (currentBlockIsOpen) {
+          sendAnthropicEvent(res, 'content_block_stop', {
+            type: 'content_block_stop',
+            index: contentBlockIndex,
+          });
+          contentBlockIndex++;
+          currentBlockIsOpen = false;
+        }
+
+        // Send tool_use block start
+        sendAnthropicEvent(res, 'content_block_start', {
+          type: 'content_block_start',
+          index: contentBlockIndex,
+          content_block: {
+            type: 'tool_use',
+            id: chunk.id,
+            name: chunk.name,
+            input: {},
+          },
+        });
+
+        // Send tool input as delta
+        sendAnthropicEvent(res, 'content_block_delta', {
+          type: 'content_block_delta',
+          index: contentBlockIndex,
+          delta: {
+            type: 'input_json_delta',
+            partial_json: JSON.stringify(chunk.arguments),
+          },
+        });
+
+        // Close tool_use block
+        sendAnthropicEvent(res, 'content_block_stop', {
+          type: 'content_block_stop',
+          index: contentBlockIndex,
+        });
+
+        contentBlockIndex++;
       } else if (chunk.type === 'usage') {
         inputTokens = chunk.inputTokens;
         outputTokens = chunk.outputTokens;
       }
     }
 
-    // Send content_block_stop event
-    sendAnthropicEvent(res, 'content_block_stop', {
-      type: 'content_block_stop',
-      index: 0,
-    });
+    // Close any open content block
+    if (currentBlockIsOpen) {
+      sendAnthropicEvent(res, 'content_block_stop', {
+        type: 'content_block_stop',
+        index: contentBlockIndex,
+      });
+    }
 
     // Send message_delta event
     sendAnthropicEvent(res, 'message_delta', {
       type: 'message_delta',
       delta: {
-        stop_reason: 'end_turn',
+        stop_reason: hasToolUse ? 'tool_use' : 'end_turn',
         stop_sequence: null,
       },
       usage: {
@@ -269,6 +377,7 @@ export async function handleStreamingMessages(
       requestId,
       inputTokens,
       outputTokens,
+      hasToolUse,
     });
 
     closeSSE(res);

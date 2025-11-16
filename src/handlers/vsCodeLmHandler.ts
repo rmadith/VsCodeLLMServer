@@ -271,24 +271,16 @@ export class VsCodeLmHandler {
               continue;
             }
 
-            // Convert tool calls to text format
-            const toolCallText = JSON.stringify({
-              type: 'tool_call',
-              name: chunk.name,
-              arguments: chunk.input,
-              callId: chunk.callId,
-            });
-
-            accumulatedText += toolCallText;
-
             logger.debug('Processing tool call', {
               name: chunk.name,
               callId: chunk.callId,
             });
 
             yield {
-              type: 'text',
-              text: toolCallText,
+              type: 'tool_call',
+              id: chunk.callId,
+              name: chunk.name,
+              arguments: chunk.input as Record<string, any>,
             };
           } catch (error) {
             logger.error('Failed to process tool call', { error });

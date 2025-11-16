@@ -11,6 +11,7 @@ import {
   ChatCompletionResponse,
   ChatCompletionChunk,
   ChatMessage,
+  ToolCall,
 } from '../models/openaiTypes';
 import { VsCodeLmHandler } from './vsCodeLmHandler';
 import { logger } from '../utils/logger';
@@ -31,34 +32,72 @@ export function convertToVsCodeLmMessages(messages: ChatMessage[]): vscode.Langu
   for (const message of messages) {
     let role: vscode.LanguageModelChatMessageRole;
 
-    // Map roles
+    // Map roles - tool messages become user messages
     switch (message.role) {
       case 'system':
       case 'assistant':
         role = vscode.LanguageModelChatMessageRole.Assistant;
         break;
       case 'user':
+      case 'tool':
       default:
         role = vscode.LanguageModelChatMessageRole.User;
         break;
     }
 
-    // Extract text content
-    let content: string;
-    if (typeof message.content === 'string') {
-      content = message.content;
-    } else if (Array.isArray(message.content)) {
-      // For multimodal content, extract text parts
-      content = message.content
-        .filter(part => part.type === 'text' && part.text)
-        .map(part => part.text)
-        .join('\n');
+    // Build message content parts
+    const contentParts: (vscode.LanguageModelTextPart | vscode.LanguageModelToolResultPart | vscode.LanguageModelToolCallPart)[] = [];
+
+    // Handle tool results first (for messages with role='tool')
+    // These should NOT include text content separately
+    if (message.role === 'tool' && message.tool_call_id && message.content) {
+      const toolResult = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+      contentParts.push(new vscode.LanguageModelToolResultPart(message.tool_call_id, [
+        new vscode.LanguageModelTextPart(toolResult)
+      ]));
     } else {
-      content = '';
+      // Handle regular text content (for non-tool messages)
+      let textContent = '';
+      if (typeof message.content === 'string') {
+        textContent = message.content;
+      } else if (Array.isArray(message.content)) {
+        // For multimodal content, extract text parts
+        textContent = message.content
+          .filter(part => part.type === 'text' && part.text)
+          .map(part => part.text)
+          .join('\n');
+      }
+
+      if (textContent) {
+        contentParts.push(new vscode.LanguageModelTextPart(textContent));
+      }
     }
 
-    if (content) {
-      vsCodeMessages.push(new vscode.LanguageModelChatMessage(role, content));
+    // Handle tool calls in assistant messages
+    if (message.tool_calls && message.tool_calls.length > 0) {
+      for (const toolCall of message.tool_calls) {
+        try {
+          // Parse arguments (they come as JSON string from OpenAI)
+          const args = typeof toolCall.function.arguments === 'string'
+            ? JSON.parse(toolCall.function.arguments)
+            : toolCall.function.arguments;
+
+          contentParts.push(new vscode.LanguageModelToolCallPart(
+            toolCall.id,
+            toolCall.function.name,
+            args
+          ));
+        } catch (error) {
+          logger.warn('Failed to parse tool call arguments', {
+            toolCallId: toolCall.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+
+    if (contentParts.length > 0) {
+      vsCodeMessages.push(new vscode.LanguageModelChatMessage(role, contentParts));
     }
   }
 
@@ -73,7 +112,7 @@ export async function handleChatCompletion(
   handler: VsCodeLmHandler,
   requestId: string
 ): Promise<ChatCompletionResponse> {
-  const { messages, model, temperature, max_tokens, frequency_penalty, presence_penalty } = request;
+  const { messages, model, temperature, max_tokens, frequency_penalty, presence_penalty, tools, tool_choice } = request;
 
   // Log unsupported parameters
   if (frequency_penalty !== undefined) {
@@ -81,6 +120,14 @@ export async function handleChatCompletion(
   }
   if (presence_penalty !== undefined) {
     logger.warn('presence_penalty is not supported by VS Code LM', { requestId });
+  }
+  if (tools && tools.length > 0) {
+    logger.debug('Tool definitions provided', { requestId, toolCount: tools.length });
+    // Note: VS Code LM API doesn't accept tool definitions in request options
+    // The client is responsible for executing tools and sending results back
+  }
+  if (tool_choice !== undefined) {
+    logger.debug('Tool choice specified', { requestId, tool_choice });
   }
 
   // Convert messages to VS Code LM format
@@ -96,6 +143,7 @@ export async function handleChatCompletion(
 
   // Collect response
   let accumulatedText = '';
+  const toolCalls: ToolCall[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -103,10 +151,33 @@ export async function handleChatCompletion(
     for await (const chunk of handler.createMessage(vsCodeMessages)) {
       if (chunk.type === 'text') {
         accumulatedText += chunk.text;
+      } else if (chunk.type === 'tool_call') {
+        // Convert tool call to OpenAI format
+        toolCalls.push({
+          id: chunk.id,
+          type: 'function',
+          function: {
+            name: chunk.name,
+            arguments: JSON.stringify(chunk.arguments),
+          },
+        });
       } else if (chunk.type === 'usage') {
         inputTokens = chunk.inputTokens;
         outputTokens = chunk.outputTokens;
       }
+    }
+
+    // Build response message
+    const responseMessage: ChatMessage = {
+      role: 'assistant',
+      content: accumulatedText || null as any,
+    };
+
+    // Add tool calls if present
+    if (toolCalls.length > 0) {
+      responseMessage.tool_calls = toolCalls;
+      // When tool calls are present, content can be null
+      responseMessage.content = accumulatedText || null as any;
     }
 
     // Build response
@@ -118,11 +189,8 @@ export async function handleChatCompletion(
       choices: [
         {
           index: 0,
-          message: {
-            role: 'assistant',
-            content: accumulatedText,
-          },
-          finish_reason: 'stop',
+          message: responseMessage,
+          finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
         },
       ],
       usage: {
@@ -136,6 +204,7 @@ export async function handleChatCompletion(
       requestId,
       inputTokens,
       outputTokens,
+      toolCallCount: toolCalls.length,
     });
 
     return response;
@@ -157,13 +226,17 @@ export async function handleStreamingChatCompletion(
   requestId: string,
   res: Response
 ): Promise<void> {
-  const { messages, model } = request;
+  const { messages, model, tools } = request;
 
   // Initialize SSE
   initSSE(res);
 
   // Convert messages to VS Code LM format
   const vsCodeMessages = convertToVsCodeLmMessages(messages);
+
+  if (tools && tools.length > 0) {
+    logger.debug('Tool definitions provided for streaming request', { requestId, toolCount: tools.length });
+  }
 
   logger.debug('Processing OpenAI streaming chat completion', {
     requestId,
@@ -174,6 +247,8 @@ export async function handleStreamingChatCompletion(
   const completionId = `chatcmpl-${uuidv4()}`;
   const created = Math.floor(Date.now() / 1000);
   let isFirstChunk = true;
+  let hasToolCalls = false;
+  let toolCallIndex = 0;
 
   try {
     for await (const chunk of handler.createMessage(vsCodeMessages)) {
@@ -197,6 +272,57 @@ export async function handleStreamingChatCompletion(
 
         sendOpenAIChunk(res, streamChunk);
         isFirstChunk = false;
+      } else if (chunk.type === 'tool_call') {
+        hasToolCalls = true;
+
+        // Send role if this is the first chunk
+        if (isFirstChunk) {
+          const roleChunk: ChatCompletionChunk = {
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model,
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant' },
+                finish_reason: null,
+              },
+            ],
+          };
+          sendOpenAIChunk(res, roleChunk);
+          isFirstChunk = false;
+        }
+
+        // Send tool call chunk
+        const toolCallChunk: ChatCompletionChunk = {
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created,
+          model,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: toolCallIndex,
+                    id: chunk.id,
+                    type: 'function',
+                    function: {
+                      name: chunk.name,
+                      arguments: JSON.stringify(chunk.arguments),
+                    },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        };
+
+        sendOpenAIChunk(res, toolCallChunk);
+        toolCallIndex++;
       } else if (chunk.type === 'usage') {
         // Send final chunk with finish_reason
         const finalChunk: ChatCompletionChunk = {
@@ -208,7 +334,7 @@ export async function handleStreamingChatCompletion(
             {
               index: 0,
               delta: {},
-              finish_reason: 'stop',
+              finish_reason: hasToolCalls ? 'tool_calls' : 'stop',
             },
           ],
         };
@@ -219,6 +345,7 @@ export async function handleStreamingChatCompletion(
           requestId,
           inputTokens: chunk.inputTokens,
           outputTokens: chunk.outputTokens,
+          hasToolCalls,
         });
       }
     }

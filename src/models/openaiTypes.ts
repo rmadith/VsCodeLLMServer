@@ -48,6 +48,45 @@ export interface ToolCall {
 }
 
 /**
+ * Function definition for tool
+ */
+export interface FunctionDefinition {
+  name: string;
+  description?: string;
+  parameters?: {
+    type: 'object';
+    properties?: Record<string, any>;
+    required?: string[];
+    [key: string]: any;
+  };
+}
+
+/**
+ * Tool definition
+ */
+export interface Tool {
+  type: 'function';
+  function: FunctionDefinition;
+}
+
+/**
+ * Tool choice - controls which tool the model should use
+ */
+export type ToolChoice = 
+  | 'none'
+  | 'auto'
+  | 'required'
+  | { type: 'function'; function: { name: string } };
+
+/**
+ * Legacy function definition (deprecated, use tools instead)
+ */
+export interface FunctionCall {
+  name: string;
+  arguments: string;
+}
+
+/**
  * Response format specification
  */
 export interface ResponseFormat {
@@ -73,6 +112,12 @@ export interface ChatCompletionRequest {
   seed?: number;
   logprobs?: boolean;
   top_logprobs?: number;
+  // Tool calling support
+  tools?: Tool[];
+  tool_choice?: ToolChoice;
+  // Legacy function calling (deprecated)
+  functions?: FunctionDefinition[];
+  function_call?: 'none' | 'auto' | { name: string };
 }
 
 /**
@@ -120,12 +165,25 @@ export interface ChatCompletionResponse {
 }
 
 /**
+ * Tool call in streaming delta (includes index)
+ */
+export interface ToolCallDelta {
+  index: number;
+  id?: string;
+  type?: 'function';
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+/**
  * Streaming chunk delta
  */
 export interface ChatCompletionDelta {
   role?: MessageRole;
   content?: string;
-  tool_calls?: Partial<ToolCall>[];
+  tool_calls?: ToolCallDelta[];
 }
 
 /**
