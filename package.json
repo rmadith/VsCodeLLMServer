@@ -1,0 +1,198 @@
+{
+  "name": "vscode-llm-server",
+  "displayName": "VS Code LLM Server",
+  "description": "Exposes VS Code GitHub Copilot as an OpenAI/Anthropic-compatible API server",
+  "version": "0.1.0",
+  "publisher": "vscode-llm-server",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vscodellmserver",
+          "title": "LLM Server",
+          "icon": "$(radio-tower)"
+        }
+      ]
+    },
+    "views": {
+      "vscodellmserver": [
+        {
+          "id": "vscodellmserver-sidebar",
+          "name": "Server Control"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vscodellmserver.start",
+        "title": "Start Server",
+        "category": "LLM Server",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "vscodellmserver.stop",
+        "title": "Stop Server",
+        "category": "LLM Server",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "vscodellmserver.restart",
+        "title": "Restart Server",
+        "category": "LLM Server",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "vscodellmserver.showLogs",
+        "title": "Show Logs",
+        "category": "LLM Server",
+        "icon": "$(output)"
+      },
+      {
+        "command": "vscodellmserver.setApiKey",
+        "title": "Set API Key",
+        "category": "LLM Server",
+        "icon": "$(key)"
+      },
+      {
+        "command": "vscodellmserver.changePort",
+        "title": "Change Port",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.changeHost",
+        "title": "Change Host",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.toggleAuth",
+        "title": "Toggle Authentication",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.changeRateLimit",
+        "title": "Change Rate Limit",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.changeLogLevel",
+        "title": "Change Log Level",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.toggleOpenAI",
+        "title": "Toggle OpenAI Endpoints",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.toggleAnthropic",
+        "title": "Toggle Anthropic Endpoints",
+        "category": "LLM Server"
+      },
+      {
+        "command": "vscodellmserver.openSettings",
+        "title": "Open Settings",
+        "category": "LLM Server",
+        "icon": "$(settings-gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vscodellmserver.openSettings",
+          "when": "view == vscodellmserver-sidebar",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VS Code LLM Server",
+      "properties": {
+        "vscodellmserver.port": {
+          "type": "number",
+          "default": 3000,
+          "description": "Port number for the HTTP server"
+        },
+        "vscodellmserver.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host address for the HTTP server"
+        },
+        "vscodellmserver.enableAuth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable API key authentication"
+        },
+        "vscodellmserver.enableOpenAI": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable OpenAI-compatible endpoints"
+        },
+        "vscodellmserver.enableAnthropic": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Anthropic-compatible endpoints"
+        },
+        "vscodellmserver.rateLimit": {
+          "type": "number",
+          "default": 60,
+          "description": "Maximum requests per minute (0 to disable)"
+        },
+        "vscodellmserver.corsOrigins": {
+          "type": "array",
+          "default": ["http://localhost:*"],
+          "description": "Allowed CORS origins"
+        },
+        "vscodellmserver.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": ["debug", "info", "warn", "error"],
+          "description": "Logging level"
+        },
+        "vscodellmserver.modelSelector": {
+          "type": "object",
+          "default": {},
+          "description": "VS Code Language Model selector (vendor, family, version)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.1.5",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/uuid": "^9.0.7",
+    "@types/node": "^20.10.6",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3",
+    "esbuild": "^0.19.11",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.17.0",
+    "@typescript-eslint/parser": "^6.17.0"
+  }
+}
+
